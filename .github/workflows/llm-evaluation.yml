@@ -1,0 +1,246 @@
+name: LLM Evaluation CI/CD Pipeline
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+      - develop
+  push:
+    branches:
+      - main
+  workflow_dispatch:  # Allow manual triggering
+
+env:
+  PYTHON_VERSION: '3.11'
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  # ============================================================================
+  # Job 1: Static Evaluation
+  # ============================================================================
+  static-evaluation:
+    name: Static Evaluation Suite
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Create output directory
+        run: |
+          mkdir -p evaluation_outputs/static
+      
+      - name: Run Static Evaluation
+        id: static_eval
+        run: |
+          python run_static_evaluation.py \
+            --output evaluation_outputs/static/results.json \
+            --model gpt-4o-mini \
+            --verbose
+        continue-on-error: true
+      
+      - name: Upload evaluation results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: evaluation-results
+          path: evaluation_outputs/static/results.json
+      
+      - name: Check Quality Gates
+        id: quality_gates
+        run: |
+          python check_quality_gates.py \
+            --results evaluation_outputs/static/results.json \
+            --min-pass-rate 95 \
+            --min-similarity 0.85 \
+            --max-hallucination 0.02 \
+            --critical-categories fraud_detection security \
+            --verbose \
+            --output-report evaluation_outputs/static/quality_report.txt
+        continue-on-error: true
+      
+      - name: Upload quality report
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: quality-report
+          path: evaluation_outputs/static/quality_report.txt
+      
+      - name: Post results to PR
+        if: github.event_name == 'pull_request'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python post_pr_results.py \
+            --results evaluation_outputs/static/results.json \
+            --pr-number $PR_NUMBER \
+            --repo ${{ github.repository }} \
+            --token ${{ secrets.GITHUB_TOKEN }} \
+            --run-url $RUN_URL
+      
+      - name: Update commit status
+        if: always()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            
+            // Read results
+            let state = 'success';
+            let description = 'Evaluation passed';
+            
+            try {
+              const results = JSON.parse(
+                fs.readFileSync('evaluation_outputs/static/results.json', 'utf8')
+              );
+              
+              if (results.pass_rate < 95) {
+                state = 'failure';
+                description = `Evaluation failed: ${results.pass_rate.toFixed(1)}% pass rate`;
+              } else {
+                description = `Evaluation passed: ${results.pass_rate.toFixed(1)}% pass rate`;
+              }
+            } catch (error) {
+              state = 'error';
+              description = 'Evaluation error: Could not read results';
+            }
+            
+            // Update commit status
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: state,
+              description: description,
+              context: 'MLOps Evaluation'
+            });
+      
+      - name: Fail if quality gates not met
+        run: |
+          if [ -f evaluation_outputs/static/results.json ]; then
+            PASS_RATE=$(python -c "import json; print(json.load(open('evaluation_outputs/static/results.json'))['pass_rate'])")
+            echo "Pass rate: $PASS_RATE%"
+            
+            if (( $(echo "$PASS_RATE < 95" | bc -l) )); then
+              echo "❌ Quality gates failed: Pass rate $PASS_RATE% < 95%"
+              exit 1
+            else
+              echo "✅ Quality gates passed: Pass rate $PASS_RATE% >= 95%"
+              exit 0
+            fi
+          else
+            echo "❌ Results file not found"
+            exit 1
+          fi
+
+  # ============================================================================
+  # Job 2: Security & Compliance (Optional)
+  # ============================================================================
+  security-check:
+    name: Security & Compliance Check
+    runs-on: ubuntu-latest
+    needs: static-evaluation
+    if: github.event_name == 'pull_request'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Check for secrets
+        run: |
+          echo "🔍 Checking for accidentally committed secrets..."
+          
+          # Check for common secret patterns
+          if grep -r "OPENAI_API_KEY.*sk-" . --exclude-dir={.git,node_modules,venv}; then
+            echo "❌ Found hardcoded OpenAI API key!"
+            exit 1
+          fi
+          
+          if grep -r "ghp_" . --exclude-dir={.git,node_modules,venv}; then
+            echo "❌ Found hardcoded GitHub token!"
+            exit 1
+          fi
+          
+          echo "✅ No secrets found in code"
+      
+      - name: Check .env is gitignored
+        run: |
+          if git ls-files | grep -q "^\.env$"; then
+            echo "❌ .env file is tracked by git!"
+            exit 1
+          fi
+          echo "✅ .env is properly gitignored"
+
+  # ============================================================================
+  # Job 3: Deployment (Only on main branch)
+  # ============================================================================
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [static-evaluation, security-check]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Download evaluation results
+        uses: actions/download-artifact@v3
+        with:
+          name: evaluation-results
+          path: evaluation_outputs/static/
+      
+      - name: Verify quality gates before deployment
+        run: |
+          PASS_RATE=$(python -c "import json; print(json.load(open('evaluation_outputs/static/results.json'))['pass_rate'])")
+          
+          if (( $(echo "$PASS_RATE < 95" | bc -l) )); then
+            echo "❌ Cannot deploy: Pass rate $PASS_RATE% < 95%"
+            exit 1
+          fi
+          
+          echo "✅ Quality gates passed: Proceeding with deployment"
+      
+      - name: Deploy to staging
+        run: |
+          echo "🚀 Deploying to staging environment..."
+          # Add your staging deployment commands here
+          # e.g., kubectl apply -f k8s/staging/
+      
+      - name: Run smoke tests
+        run: |
+          echo "🧪 Running smoke tests..."
+          # Add your smoke test commands here
+      
+      - name: Deploy to production
+        run: |
+          echo "🚀 Deploying to production environment..."
+          # Add your production deployment commands here
+          # e.g., kubectl apply -f k8s/production/
+      
+      - name: Notify deployment
+        if: always()
+        run: |
+          echo "📢 Deployment complete!"
+          # Add Slack notification here if SLACK_WEBHOOK_URL is configured
