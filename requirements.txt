@@ -1,0 +1,67 @@
+# Session 29: Advanced LLM Evaluation & CI/CD Integration
+# Requirements file for MLOps with Agentic AI Course
+
+# ============================================================================
+# CORE LLM & EVALUATION LIBRARIES
+# ============================================================================
+openai==1.59.5                    # OpenAI API client
+promptlayer==0.10.7               # Prompt tracking and versioning
+evals==0.4.0                      # OpenAI's evaluation framework
+
+# ============================================================================
+# DATA PROCESSING & ANALYSIS
+# ============================================================================
+pandas==2.2.0                     # Data manipulation
+numpy==1.26.3                     # Numerical computing
+scikit-learn==1.4.0               # ML utilities (cosine similarity, etc.)
+
+# ============================================================================
+# VISUALIZATION
+# ============================================================================
+matplotlib==3.8.2                 # Plotting
+seaborn==0.13.1                   # Statistical visualization
+
+# ============================================================================
+# TESTING & CI/CD
+# ============================================================================
+pytest==8.0.0                     # Testing framework
+pytest-cov==4.1.0                 # Coverage reporting
+pytest-timeout==2.2.0             # Test timeout management
+
+# ============================================================================
+# LOGGING & MONITORING
+# ============================================================================
+loguru==0.7.2                     # Advanced logging
+python-dotenv==1.0.1              # Environment variable management
+
+# ============================================================================
+# CONFIGURATION & UTILITIES
+# ============================================================================
+pyyaml==6.0.1                     # YAML parsing (for configs)
+click==8.1.7                      # CLI tool building
+rich==13.7.0                      # Beautiful terminal output
+tqdm==4.66.1                      # Progress bars
+
+# ============================================================================
+# OPTIONAL: LOCAL LLM SUPPORT
+# ============================================================================
+# ollama==0.1.6                   # Uncomment for local LLM support
+
+# ============================================================================
+# INSTALLATION NOTES
+# ============================================================================
+# 
+# Installation:
+#   pip install -r requirements.txt
+#
+# For Promptfoo (Node.js based):
+#   npm install -g promptfoo
+#
+# For OpenAI Evals:
+#   pip install evals (already included above)
+#
+# Environment Variables Required:
+#   OPENAI_API_KEY          (required)
+#   PROMPTLAYER_API_KEY     (optional, but recommended)
+#
+# ============================================================================
